@@ -1,0 +1,23 @@
+
+{
+    "database": {
+        "host": "localhost",
+        "user": "pi",
+        "password": "raspberry",
+        "database": "face_ad_system"
+    },
+    "camera": {
+        "width": 640,
+        "height": 480,
+        "fps": 30
+    },
+    "recognition": {
+        "tolerance": 0.6,
+        "model": "hog"
+    },
+    "display": {
+        "fullscreen": true,
+        "screen_width": 1920,
+        "screen_height": 1080
+    }
+}
