@@ -12,9 +12,12 @@ import numpy as np
 import mysql.connector
 from datetime import datetime
 import json
+import math
 import os
 import pickle
+import shlex
 import time
+from pathlib import Path
 from PIL import Image, ImageTk
 import tkinter as tk
 from tkinter import ttk
@@ -26,6 +29,8 @@ class FaceRecognitionAdSystem:
         self.member_data = {}
         self.camera = None
         self.db_connection = None
+        self.env_file_path = None
+        self.env_settings = {}
 
         # 載入設定
         self.load_config()
@@ -41,14 +46,17 @@ class FaceRecognitionAdSystem:
 
     def load_config(self):
         '''載入系統設定'''
+        self._load_env_file()
         self.config = {
             'database': {
                 'host': 'localhost',
                 'user': 'pi',
                 'password': 'raspberry',
-                'database': 'face_ad_system'
+                'database': 'face_ad_system',
+                'port': 3306
             },
             'camera': {
+                'source': 0,
                 'width': 640,
                 'height': 480,
                 'fps': 30
@@ -58,16 +66,147 @@ class FaceRecognitionAdSystem:
                 'model': 'hog'  # 或 'cnn' (需要GPU)
             }
         }
+        self._apply_env_overrides()
+
+    def _load_env_file(self):
+        '''從 .env 載入設定值'''
+        env_file_setting = os.getenv('FACE_AD_ENV_FILE', '.env')
+        candidate_paths = []
+
+        if os.path.isabs(env_file_setting):
+            candidate_paths.append(Path(env_file_setting))
+        else:
+            base_dir = Path(__file__).resolve().parent
+            candidate_paths.extend([
+                base_dir / env_file_setting,
+                base_dir.parent / env_file_setting,
+                Path.cwd() / env_file_setting
+            ])
+
+        self.env_file_path = None
+        self.env_settings = {}
+
+        seen = set()
+        for path in candidate_paths:
+            if path in seen:
+                continue
+            seen.add(path)
+            if path.exists():
+                self.env_file_path = path
+                self.env_settings = self._parse_env_file(path)
+                break
+
+    def _parse_env_file(self, path):
+        '''解析 .env 檔案''' 
+        env_values = {}
+        try:
+            with path.open('r', encoding='utf-8') as env_file:
+                for raw_line in env_file:
+                    line = raw_line.strip()
+                    if not line or line.startswith('#') or '=' not in line:
+                        continue
+
+                    key, value = raw_line.split('=', 1)
+                    key = key.strip()
+                    if not key:
+                        continue
+
+                    value = value.strip()
+                    try:
+                        tokens = shlex.split(value, comments=True)
+                    except ValueError:
+                        tokens = [value]
+
+                    env_values[key] = tokens[0] if tokens else ''
+        except OSError as exc:
+            print(f"讀取環境檔案 {path} 時發生錯誤: {exc}")
+        return env_values
+
+    def _get_env_override(self, keys, cast=None, default=None):
+        '''取得環境變數覆寫值'''
+        if isinstance(keys, str):
+            keys = (keys,)
+
+        for key in keys:
+            if key is None:
+                continue
+
+            raw_value = os.getenv(key)
+            if raw_value is None:
+                raw_value = self.env_settings.get(key)
+
+            if raw_value is None:
+                continue
+
+            if cast:
+                try:
+                    converted = cast(raw_value)
+                except (TypeError, ValueError):
+                    print(f"環境變數 {key} 的值 {raw_value} 無法轉換，沿用預設值 {default}。")
+                    return default
+
+                if isinstance(converted, float) and math.isnan(converted):
+                    print(f"環境變數 {key} 的值 {raw_value} 無法轉換，沿用預設值 {default}。")
+                    return default
+
+                return converted
+
+            return raw_value
+
+        return default
+
+    def _convert_camera_source(self, value):
+        '''將攝影機來源字串轉換為適當型別'''
+        if isinstance(value, str):
+            stripped = value.strip()
+            if stripped.isdigit() or (stripped.startswith('-') and stripped[1:].isdigit()):
+                return int(stripped)
+            return stripped
+        return value
+
+    def _apply_env_overrides(self):
+        '''根據環境變數覆寫預設設定'''
+        db_conf = self.config['database']
+        db_conf['host'] = self._get_env_override(('FACE_AD_DB_HOST', 'DB_HOST'), default=db_conf['host'])
+        db_conf['user'] = self._get_env_override(('FACE_AD_DB_USER', 'DB_USER'), default=db_conf['user'])
+        db_conf['password'] = self._get_env_override(('FACE_AD_DB_PASSWORD', 'DB_PASSWORD'), default=db_conf['password'])
+        db_conf['database'] = self._get_env_override(('FACE_AD_DB_NAME', 'DB_NAME'), default=db_conf['database'])
+        db_conf['port'] = self._get_env_override(('FACE_AD_DB_PORT', 'DB_PORT'), cast=int, default=db_conf['port'])
+
+        camera_conf = self.config['camera']
+        source_override = self._get_env_override(('FACE_AD_CAMERA_SOURCE', 'CAMERA_SOURCE'))
+        if source_override is not None:
+            camera_conf['source'] = self._convert_camera_source(source_override)
+        camera_conf['width'] = self._get_env_override(('FACE_AD_CAMERA_WIDTH', 'CAMERA_WIDTH'), cast=int, default=camera_conf['width'])
+        camera_conf['height'] = self._get_env_override(('FACE_AD_CAMERA_HEIGHT', 'CAMERA_HEIGHT'), cast=int, default=camera_conf['height'])
+        camera_conf['fps'] = self._get_env_override(('FACE_AD_CAMERA_FPS', 'CAMERA_FPS'), cast=int, default=camera_conf['fps'])
+
+        recognition_conf = self.config['recognition']
+        recognition_conf['tolerance'] = self._get_env_override(
+            ('FACE_AD_RECOGNITION_TOLERANCE', 'RECOGNITION_TOLERANCE'),
+            cast=float,
+            default=recognition_conf['tolerance']
+        )
+        recognition_conf['model'] = self._get_env_override(
+            ('FACE_AD_RECOGNITION_MODEL', 'RECOGNITION_MODEL'),
+            default=recognition_conf['model']
+        )
 
     def connect_database(self):
         '''連接MySQL資料庫'''
         try:
-            self.db_connection = mysql.connector.connect(
-                host=self.config['database']['host'],
-                user=self.config['database']['user'],
-                password=self.config['database']['password'],
-                database=self.config['database']['database']
-            )
+            connection_config = {
+                'host': self.config['database']['host'],
+                'user': self.config['database']['user'],
+                'password': self.config['database']['password'],
+                'database': self.config['database']['database']
+            }
+
+            port = self.config['database'].get('port')
+            if port:
+                connection_config['port'] = port
+
+            self.db_connection = mysql.connector.connect(**connection_config)
             print("資料庫連接成功")
         except mysql.connector.Error as err:
             print(f"資料庫連接失敗: {err}")
@@ -75,7 +214,8 @@ class FaceRecognitionAdSystem:
     def init_camera(self):
         '''初始化攝影機'''
         try:
-            self.camera = cv2.VideoCapture(0)
+            source = self.config['camera'].get('source', 0)
+            self.camera = cv2.VideoCapture(source)
             self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, self.config['camera']['width'])
             self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, self.config['camera']['height'])
             self.camera.set(cv2.CAP_PROP_FPS, self.config['camera']['fps'])
