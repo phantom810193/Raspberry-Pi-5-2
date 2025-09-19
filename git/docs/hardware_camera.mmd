@@ -1,0 +1,26 @@
+flowchart LR
+  subgraph "Raspberry Pi 5"
+    CAM0["CAM0 連接器"]:::conn
+    CAM1["CAM1 連接器"]:::conn
+    HDMI["HDMI 輸出"]:::io
+    USB["USB 3.0/2.0"]:::io
+    POWER["USB‑C 電源 (5V/5A)"]:::power
+  end
+
+  Camera["CSI 相機模組<br/>(導電面朝連接器金屬端)"]:::camera
+  Ribbon["CSI Ribbon Cable"]:::cable
+  LCD["HDMI 小螢幕"]:::display
+  USBcam["USB Webcam"]:::camera
+  PSU["電源供應器"]:::power
+
+  Camera -- "插入" --> Ribbon --> CAM0
+  HDMI --- LCD
+  POWER --- PSU
+  USB --- USBcam
+
+  classDef camera fill:#eef8ff,stroke:#3b82f6,stroke-width:2px,color:#111;
+  classDef cable fill:#fff7ed,stroke:#fb923c,stroke-width:2px,color:#111,stroke-dasharray: 4 2;
+  classDef io fill:#f0fdf4,stroke:#22c55e,stroke-width:2px,color:#111;
+  classDef power fill:#fff1f2,stroke:#ef4444,stroke-width:2px,color:#111;
+  classDef conn fill:#f8fafc,stroke:#64748b,stroke-width:1.5px,color:#111;
+  classDef display fill:#f5f3ff,stroke:#8b5cf6,stroke-width:2px,color:#111;
